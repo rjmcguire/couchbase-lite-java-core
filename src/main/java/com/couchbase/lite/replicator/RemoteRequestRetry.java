@@ -81,6 +81,7 @@ public class RemoteRequestRetry<T> implements CustomFuture<T> {
     private AtomicBoolean completed = new AtomicBoolean(false);
     private Response requestHttpResponse;
     private Object requestResult;
+    private long requestResultSize;
     private Throwable requestThrowable;
     private BlockingQueue<Future> pendingRequests;
     Map<Future, CancellableRunnable> runnables = new HashMap<Future, CancellableRunnable>();
@@ -242,6 +243,7 @@ public class RemoteRequestRetry<T> implements CustomFuture<T> {
     private RemoteRequest generateRemoteRequest() {
         requestHttpResponse = null;
         requestResult = null;
+        requestResultSize = 0;
         requestThrowable = null;
         RemoteRequest request;
         switch (requestType) {
@@ -297,29 +299,30 @@ public class RemoteRequestRetry<T> implements CustomFuture<T> {
 
     private RemoteRequestCompletion onCompletionInner = new RemoteRequestCompletion() {
         @Override
-        public void onCompletion(Response response, Object result, Throwable e) {
+        public void onCompletion(Response response, Object contentBody, long contentSize, Throwable e) {
             Log.d(TAG, "%s: RemoteRequestRetry inner request finished, url: %s", this, url);
             if (e == null) {
                 Log.d(TAG, "%s: RemoteRequestRetry was successful, calling callback url: %s", this, url);
                 // just propagate completion block call back to the original caller
-                completed(response, result, e);
+                completed(response, contentBody, contentSize, e);
             } else {
                 // Only retry if error is  TransientError (5xx).
                 if (isTransientError(response, e)) {
                     if (requestExecutor != null && requestExecutor.isShutdown()) {
                         // requestExecutor was shutdown, no more retry.
                         Log.e(TAG, "%s: RemoteRequestRetry failed, RequestExecutor was shutdown. url: %s", this, url);
-                        completed(response, result, e);
+                        completed(response, contentBody, contentSize, e);
                     } else if (retryCount >= MAX_RETRIES) {
                         Log.d(TAG, "%s: RemoteRequestRetry failed, but transient error.  retries exhausted. url: %s", this, url);
                         // ok, we're out of retries, propagate completion block call
-                        completed(response, result, e);
+                        completed(response, contentBody, contentSize, e);
                     } else {
                         // we're going to try again, so don't call the original caller's
                         // completion block yet.  Eventually it will get called though
                         Log.d(TAG, "%s: RemoteRequestRetry failed, but transient error.  will retry. url: %s", this, url);
                         requestHttpResponse = response;
-                        requestResult = result;
+                        requestResult = contentBody;
+                        requestResultSize = contentSize;
                         requestThrowable = e;
                         retryCount += 1;
                         // delay * 2 << retry
@@ -334,19 +337,21 @@ public class RemoteRequestRetry<T> implements CustomFuture<T> {
                 } else {
                     Log.d(TAG, "%s: RemoteRequestRetry failed, non-transient error.  NOT retrying. url: %s", this, url);
                     // this isn't a transient error, so there's no point in retrying
-                    completed(response, result, e);
+                    completed(response, contentBody, contentSize, e);
                 }
             }
         }
 
-        private void completed(Response response, Object result, Throwable e) {
+        private void completed(Response response, Object contentBody, long contentSize, Throwable e) {
             requestHttpResponse = response;
-            requestResult = result;
+            requestResult = contentBody;
+            requestResultSize = contentSize;
             requestThrowable = e;
-            onCompletionCaller.onCompletion(requestHttpResponse, requestResult, requestThrowable);
+            onCompletionCaller.onCompletion(requestHttpResponse, requestResult, requestResultSize, requestThrowable);
             // release unnecessary references to reduce memory usage as soon as called onComplete().
             requestHttpResponse = null;
             requestResult = null;
+            requestResultSize = 0;
             requestThrowable = null;
             removeFromQueue();
             completed.set(true);

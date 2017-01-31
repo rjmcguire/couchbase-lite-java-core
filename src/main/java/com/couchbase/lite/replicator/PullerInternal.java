@@ -47,6 +47,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Response;
@@ -77,6 +78,8 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
     private static final int INSERTION_BATCHER_DELAY = 250; // 0.25 Seconds
     private static final int INSERTION_BATCHER_CAPACITY = 100;
 
+    private static final long MAX_QUEUE_MEMORY_SIZE = 2 * 1024 * 1024; // 2MB
+
     private ChangeTracker changeTracker;
     protected SequenceMap pendingSequences;
     protected Boolean canBulkGet;  // Does the server support _bulk_get requests?
@@ -88,6 +91,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
             new ArrayList<RevisionInternal>(100));
     protected int httpConnectionCount;
     protected Batcher<RevisionInternal> downloadsToInsert;
+    protected AtomicLong queuedMemorySize = new AtomicLong(0);
 
     private String str = null;
 
@@ -125,6 +129,9 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                 @Override
                 public void process(List<RevisionInternal> inbox) {
                     insertDownloads(inbox);
+                    if (downloadsToInsert.count() == 0) {
+                        queuedMemorySize.set(0);
+                    }
                 }
             });
         }
@@ -332,12 +339,12 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                     db,
                     this.requestHeaders,
                     new RemoteBulkDownloaderRequest.BulkDownloaderDocument() {
-                        public void onDocument(Map<String, Object> props) {
+                        public void onDocument(Map<String, Object> props, long size) {
                             // Got a revision!
                             // Find the matching revision in 'remainingRevs' and get its sequence:
                             RevisionInternal rev;
                             if (props.get("_id") != null) {
-                                rev = new RevisionInternal(props);
+                                rev = new RevisionInternal(props, size);
                             } else {
                                 rev = new RevisionInternal((String) props.get("id"),
                                         (String) props.get("rev"), false);
@@ -362,8 +369,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                         }
                     },
                     new RemoteRequestCompletion() {
-
-                        public void onCompletion(Response httpResponse, Object result, Throwable e) {
+                        public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
                             // The entire _bulk_get is finished:
                             if (e != null) {
                                 setError(e);
@@ -456,12 +462,22 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
             }
         }
 
-        if (rev != null && rev.getBody() != null)
-            rev.getBody().compact();
+        // NOTE: should not/not necessary to call Body.compact()
+        // new RevisionInternal(Map<string, Object>) creates Body instance only
+        // with `object`. Serializing object to json causes two unnecessary
+        // JSON serializations.
+
+        if (rev.getBody() != null)
+            queuedMemorySize.addAndGet(rev.getBody().getSize());
 
         downloadsToInsert.queueObject(rev);
-    }
 
+        // if queue memory size is more than maximum, force flush the queue.
+        if (queuedMemorySize.get() > MAX_QUEUE_MEMORY_SIZE) {
+            Log.d(TAG, "Flushing queued memory size at: " + queuedMemorySize);
+            downloadsToInsert.flushAll(true);
+        }
+    }
 
     // Get as many revisions as possible in one _all_docs request.
     // This is compatible with CouchDB, but it only works for revs of generation 1 without attachments.
@@ -487,10 +503,9 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                 "_all_docs?include_docs=true",
                 body,
                 new RemoteRequestCompletion() {
+                    public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
 
-                    public void onCompletion(Response httpResponse, Object result, Throwable e) {
-
-                        Map<String, Object> res = (Map<String, Object>) result;
+                        Map<String, Object> res = (Map<String, Object>) contentBody;
 
                         if (e != null) {
                             setError(e);
@@ -586,7 +601,12 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                                 continue;
                             }
                         }
-                        if (rev.getBody() != null) rev.getBody().compact();
+
+                        // pull replication's body should not be referenced by others.
+                        // should be safe to release.
+                        if (rev.getBody() != null)
+                            rev.getBody().release();
+
 
                         // Mark this revision's fake sequence as processed:
                         pendingSequences.removeSequence(fakeSequence);
@@ -689,7 +709,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                 null, db, new RemoteRequestCompletion() {
 
                     @Override
-                    public void onCompletion(Response httpResponse, Object result, Throwable e) {
+                    public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
                         if (e != null) {
                             Log.w(TAG, "Error pulling remote revision: %s", e, this);
                             if (Utils.isDocumentError(e)) {
@@ -700,18 +720,29 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                                 setError(e);
                             }
                         } else {
-                            Map<String, Object> properties = (Map<String, Object>) result;
+                            Map<String, Object> properties = (Map<String, Object>) contentBody;
                             PulledRevision gotRev = new PulledRevision(properties);
                             gotRev.setSequence(rev.getSequence());
 
                             Log.d(TAG, "%s: pullRemoteRevision add rev: %s to batcher: %s",
                                     PullerInternal.this, gotRev, downloadsToInsert);
 
+                            // NOTE: should not/not necessary to call Body.compact()
+                            // new PulledRevision(Map<string, Object>) creates Body instance only
+                            // with `object`. Serializing object to json causes two unnecessary
+                            // JSON serializations.
+
                             if (gotRev.getBody() != null)
-                                gotRev.getBody().compact();
+                                queuedMemorySize.addAndGet(gotRev.getBody().getSize());
 
                             // Add to batcher ... eventually it will be fed to -insertRevisions:.
                             downloadsToInsert.queueObject(gotRev);
+
+                            // if queue memory size is more than maximum, force flush the queue.
+                            if (queuedMemorySize.get() > MAX_QUEUE_MEMORY_SIZE) {
+                                Log.d(TAG, "Flushing  queued memory size at: " + queuedMemorySize);
+                                downloadsToInsert.flushAll(true);
+                            }
                         }
 
                         // Note that we've finished this task:

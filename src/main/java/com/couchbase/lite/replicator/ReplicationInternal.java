@@ -453,7 +453,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         Future future = sendAsyncRequest("GET", sessionPath, null, new RemoteRequestCompletion() {
 
             @Override
-            public void onCompletion(Response _response, Object result, Throwable err) {
+            public void onCompletion(Response _response, Object contentBody, long contentSize, Throwable err) {
                 try {
                     if (err != null) {
                         // If not at /db/_session, try CouchDB location /_session
@@ -470,7 +470,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
                             setError(err);
                         }
                     } else {
-                        Map<String, Object> response = (Map<String, Object>) result;
+                        Map<String, Object> response = (Map<String, Object>) contentBody;
                         Log.w(Log.TAG_SYNC, "%s checkSessionAtPath() response: %s", this, response);
                         Map<String, Object> userCtx = (Map<String, Object>) response.get("userCtx");
                         String username = (String) userCtx.get("name");
@@ -520,9 +520,9 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         boolean cancelable = false; // make sure not-canceled during login.
         Future future = sendAsyncRequest(method, loginPath, cancelable, loginParameters, new RemoteRequestCompletion() {
             @Override
-            public void onCompletion(Response httpResponse, Object result, Throwable error) {
+            public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable error) {
                 if (loginAuth != null && loginAuth.implementedLoginResponse()) {
-                    loginAuth.loginResponse(result,
+                    loginAuth.loginResponse(contentBody,
                             httpResponse != null ? httpResponse.headers() : null,
                             error,
                             new LoginAuthorizer.ContinuationBlock() {
@@ -693,7 +693,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         request.setAuthenticator(getAuthenticator());
         request.setOnPreCompletionCaller(new RemoteRequestCompletion() {
             @Override
-            public void onCompletion(Response response, Object result, Throwable e) {
+            public void onCompletion(Response response, Object contentBody, long contentSize, Throwable e) {
                 if (serverType == null && response != null) {
                     String serverVersion = response.header("Server");
                     if (serverVersion != null) {
@@ -847,7 +847,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         Future future = sendAsyncRequest("PUT", "_local/" + checkpointID, false, body, new RemoteRequestCompletion() {
 
             @Override
-            public void onCompletion(Response httpResponse, Object result, Throwable e) {
+            public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
 
                 Log.d(Log.TAG_SYNC,
                         "%s: put remote _local document request finished.  checkpointID: %s body: %s",
@@ -875,7 +875,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
                         }
                     } else {
                         // Saved checkpoint:
-                        Map<String, Object> response = (Map<String, Object>) result;
+                        Map<String, Object> response = (Map<String, Object>) contentBody;
                         body.put("_rev", response.get("rev"));
                         remoteCheckpoint = body;
                         boolean isOpen = false;
@@ -931,7 +931,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         Log.i(Log.TAG_SYNC, "%s: Refreshing remote checkpoint to get its _rev...", this);
         Future future = sendAsyncRequest("GET", "_local/" + remoteCheckpointDocID(), null, new RemoteRequestCompletion() {
             @Override
-            public void onCompletion(Response httpResponse, Object result, Throwable e) {
+            public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
                 if (db == null) {
                     Log.w(Log.TAG_SYNC, "%s: db == null while refreshing remote checkpoint.  aborting", this);
                     return;
@@ -939,8 +939,8 @@ abstract class ReplicationInternal implements BlockingQueueListener {
                 if (e != null && Utils.getStatusFromError(e) != Status.NOT_FOUND) {
                     Log.e(Log.TAG_SYNC, "%s: Error refreshing remote checkpoint", e, this);
                 } else {
-                    Log.d(Log.TAG_SYNC, "%s: Refreshed remote checkpoint: %s", this, result);
-                    remoteCheckpoint = (Map<String, Object>) result;
+                    Log.d(Log.TAG_SYNC, "%s: Refreshed remote checkpoint: %s", this, contentBody);
+                    remoteCheckpoint = (Map<String, Object>) contentBody;
                     lastSequenceChanged = true;
                     saveLastSequence();  // try saving again
                 }
@@ -1007,7 +1007,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
         Future future = sendAsyncRequest("GET", "_local/" + checkpointId, null, dontLog404, new RemoteRequestCompletion() {
 
             @Override
-            public void onCompletion(Response httpResponse, Object result, Throwable e) {
+            public void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e) {
                 if (e != null && !Utils.is404(e)) {
                     Log.w(Log.TAG_SYNC, "%s: error getting remote checkpoint", e, this);
                     setError(e);
@@ -1017,7 +1017,7 @@ abstract class ReplicationInternal implements BlockingQueueListener {
                                 this, remoteCheckpointDocID());
                         maybeCreateRemoteDB();
                     }
-                    Map<String, Object> response = (Map<String, Object>) result;
+                    Map<String, Object> response = (Map<String, Object>) contentBody;
                     remoteCheckpoint = response;
                     String remoteLastSequence = null;
                     if (response != null) {

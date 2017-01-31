@@ -80,7 +80,8 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
      * Execute request
      */
     protected void executeRequest(OkHttpClient httpClient, Request request) {
-        Object fullBody = null;
+        Object contentBody = null;
+        long contentSize = 0;
         Throwable error = null;
         Response response = null;
         try {
@@ -117,12 +118,15 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
                                 while ((numBytesRead = stream.read(buffer)) != -1)
                                     reader.appendData(buffer, 0, numBytesRead);
                                 reader.finish();
-                                fullBody = reader.getDocumentProperties();
+                                contentBody = reader.getDocumentProperties();
+                                contentSize = reader.getDocumentSize();
                             }
                             // JSON (non-multipart)
-                            else
-                                fullBody = Manager.getObjectMapper().readValue(
+                            else {
+                                contentBody = Manager.getObjectMapper().readValue(
                                         stream, Object.class);
+                                contentSize = responseBody.contentLength();
+                            }
                         }
                     } finally {
                         try {
@@ -136,7 +140,7 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
                 Log.w(TAG, "%s: executeRequest() Exception: %s.  url: %s", this, e, url);
                 error = e;
             }
-            respondWithResult(fullBody, error, response);
+            respondWithResult(contentBody, contentSize, error, response);
         } finally {
             RequestUtils.closeResponseBody(response);
         }

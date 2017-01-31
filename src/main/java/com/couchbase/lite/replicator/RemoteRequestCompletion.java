@@ -16,5 +16,5 @@ package com.couchbase.lite.replicator;
 import okhttp3.Response;
 
 public interface RemoteRequestCompletion {
-    void onCompletion(Response httpResponse, Object result, Throwable e);
+    void onCompletion(Response httpResponse, Object contentBody, long contentSize, Throwable e);
 }

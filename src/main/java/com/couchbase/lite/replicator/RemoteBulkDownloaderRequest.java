@@ -49,7 +49,7 @@ public class RemoteBulkDownloaderRequest extends RemoteRequest implements Multip
 
     @InterfaceAudience.Private
     public interface BulkDownloaderDocument {
-        void onDocument(Map<String, Object> props);
+        void onDocument(Map<String, Object> props, long size);
     }
 
     ////////////////////////////////////////////////////////////
@@ -109,7 +109,8 @@ public class RemoteBulkDownloaderRequest extends RemoteRequest implements Multip
      * Execute request
      */
     protected void executeRequest(OkHttpClient httpClient, Request request) {
-        Object fullBody = null;
+        Object contentBody = null;
+        long contentSize = 0;
         Throwable error = null;
         Response response = null;
         try {
@@ -157,8 +158,9 @@ public class RemoteBulkDownloaderRequest extends RemoteRequest implements Multip
                             else {
                                 Log.v(TAG, "contentTypeHeader is not multipart = %s",
                                         type.toString());
-                                fullBody = Manager.getObjectMapper().readValue(
+                                contentBody = Manager.getObjectMapper().readValue(
                                         stream, Object.class);
+                                contentSize = responseBody.contentLength();
                             }
                         }
                     } finally {
@@ -173,7 +175,7 @@ public class RemoteBulkDownloaderRequest extends RemoteRequest implements Multip
                 Log.w(TAG, "%s: executeRequest() Exception: %s.  url: %s", this, e, url);
                 error = e;
             }
-            respondWithResult(fullBody, error, response);
+            respondWithResult(contentBody, contentSize, error, response);
         } finally {
             RequestUtils.closeResponseBody(response);
         }
@@ -226,7 +228,7 @@ public class RemoteBulkDownloaderRequest extends RemoteRequest implements Multip
         if (_docReader == null)
             throw new IllegalStateException("_docReader is not defined");
         _docReader.finish();
-        _onDocument.onDocument(_docReader.getDocumentProperties());
+        _onDocument.onDocument(_docReader.getDocumentProperties(), _docReader.getDocumentSize());
         _docReader = null;
         Log.v(TAG, "%s: Finished document", this);
     }

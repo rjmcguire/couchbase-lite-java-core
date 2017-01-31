@@ -251,7 +251,8 @@ public class RemoteRequest implements CancellableRunnable {
      * Execute request
      */
     protected void executeRequest(OkHttpClient httpClient, Request request) {
-        Object fullBody = null;
+        Object contentBody = null;
+        long contentSize = 0;
         Throwable error = null;
         Response response = null;
         try {
@@ -283,7 +284,8 @@ public class RemoteRequest implements CancellableRunnable {
                         // decompress if contentEncoding is gzip
                         if (Utils.isGzip(response))
                             stream = new GZIPInputStream(stream);
-                        fullBody = Manager.getObjectMapper().readValue(stream, Object.class);
+                        contentBody = Manager.getObjectMapper().readValue(stream, Object.class);
+                        contentSize = response.body().contentLength();
                     } finally {
                         try {
                             stream.close();
@@ -296,21 +298,22 @@ public class RemoteRequest implements CancellableRunnable {
                 Log.w(TAG, "%s: executeRequest() Exception: %s.  url: %s", e, this, e, url);
                 error = e;
             }
-            respondWithResult(fullBody, error, response);
+            respondWithResult(contentBody, contentSize, error, response);
         } finally {
             RequestUtils.closeResponseBody(response);
         }
     }
 
-    protected void respondWithResult(final Object result,
+    protected void respondWithResult(final Object contentBody,
+                                     final long contentSize,
                                      final Throwable error,
                                      final Response response) {
         try {
             if (onPreCompletion != null)
-                onPreCompletion.onCompletion(response, null, error);
-            onCompletion.onCompletion(response, result, error);
+                onPreCompletion.onCompletion(response, null, 0, error);
+            onCompletion.onCompletion(response, contentBody, contentSize, error);
             if (onPostCompletion != null)
-                onPostCompletion.onCompletion(response, null, error);
+                onPostCompletion.onCompletion(response, null, 0, error);
         } catch (Exception e) {
             Log.e(TAG, "RemoteRequestCompletionBlock throw Exception", e);
         }
